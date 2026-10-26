@@ -1,0 +1,722 @@
+<title>Динозаврик</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --neon-cyan: #00fff7;
+    --neon-pink: #ff00aa;
+    --neon-yellow: #f5ff00;
+    --neon-purple: #bf00ff;
+    --ground-top: #00fff7;
+    --panel: #0d0d1a;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100%;
+    padding-block: 16px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    font-family: 'Courier New', monospace;
+    overflow: hidden;
+  }
+  h1 {
+    font-size: clamp(1.2rem, 5vw, 2rem);
+    color: var(--neon-cyan);
+    text-shadow: 0 0 12px var(--neon-cyan), 0 0 30px var(--neon-cyan);
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    image-rendering: pixelated;
+  }
+  #gameCanvas {
+    display: block;
+    max-width: 100%;
+    cursor: pointer;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    border: 3px solid var(--neon-cyan);
+    box-shadow: 0 0 18px var(--neon-cyan), 0 0 50px rgba(0,255,247,.15);
+  }
+  #controls {
+    margin-top: 10px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .btn {
+    font-family: 'Courier New', monospace;
+    font-size: .85rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    border: 2px solid var(--neon-pink);
+    background: transparent;
+    color: var(--neon-pink);
+    padding: 8px 18px;
+    cursor: pointer;
+    text-shadow: 0 0 8px var(--neon-pink);
+    box-shadow: 0 0 10px rgba(255,0,170,.3);
+    transition: background .1s;
+  }
+  .btn:hover, .btn:focus { background: rgba(255,0,170,.15); }
+  #hint {
+    font-size: .8rem;
+    color: rgba(0,255,247,.5);
+    letter-spacing: 2px;
+    margin-top: 8px;
+    text-align: center;
+  }
+</style>
+
+<h1>// DINO.EXE //</h1>
+<canvas id="gameCanvas" width="640" height="200" tabindex="0"></canvas>
+<div id="controls">
+  <button class="btn" id="pauseBtn">⏸ ПАУЗА [P]</button>
+  <button class="btn" id="restartBtn">↺ RESTART</button>
+</div>
+<p id="hint">SPACE / ↑ — ПРЫЖОК &nbsp;|&nbsp; ↓ — ПРИСЕСТЬ &nbsp;|&nbsp; P — ПАУЗА</p>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+// Resize
+function resize() {
+  const maxW = Math.min(640, window.innerWidth - 40);
+  canvas.style.width = maxW + 'px';
+  canvas.style.height = (maxW * 200 / 640) + 'px';
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ====== CONSTANTS ======
+const GND = 155;   // top of ground strip (dino stands here)
+const DINO_W = 16, DINO_H = 20;
+
+// ====== PIXEL SPRITES (8x8 blocks, drawn via fillRect) ======
+// Each sprite: array of [col, row, color] — drawn as 2×2 pixel blocks
+
+function px(x, y, color, size=2) {
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, size, size);
+}
+
+// Dino sprite — 16×20, 2px pixels = 8×10 pixel-grid
+const DINO_PIXELS = [
+  // head row 0
+  [3,0,'#00fff7'],[4,0,'#00fff7'],[5,0,'#00fff7'],[6,0,'#00fff7'],
+  // head row 1 — eye
+  [3,1,'#00fff7'],[4,1,'#f5ff00'],[5,1,'#f5ff00'],[6,1,'#00fff7'],[7,1,'#00fff7'],
+  // head row 2
+  [3,2,'#00fff7'],[4,2,'#00fff7'],[5,2,'#00fff7'],[6,2,'#00fff7'],[7,2,'#00fff7'],
+  // body row 3-5
+  [2,3,'#00fff7'],[3,3,'#00aacc'],[4,3,'#00aacc'],[5,3,'#00aacc'],[6,3,'#00fff7'],
+  [1,4,'#00fff7'],[2,4,'#00aacc'],[3,4,'#00aacc'],[4,4,'#00aacc'],[5,4,'#00aacc'],[6,4,'#00fff7'],
+  [1,5,'#00fff7'],[2,5,'#00aacc'],[3,5,'#00aacc'],[4,5,'#00aacc'],[5,5,'#00fff7'],
+  // tail row 4-6
+  [0,4,'#00fff7'],[0,5,'#00fff7'],[0,6,'#00fff7'],
+  // body row 6
+  [2,6,'#00fff7'],[3,6,'#00aacc'],[4,6,'#00aacc'],[5,6,'#00fff7'],
+  // legs row 7-9
+  [2,7,'#bf00ff'],[3,7,'#bf00ff'],[4,7,'#bf00ff'],[5,7,'#bf00ff'],
+];
+
+// Leg frames
+const LEG_A = [[2,8,'#bf00ff'],[3,8,'#bf00ff'],[4,8,'#ff00aa'],[5,8,'#ff00aa'],
+               [2,9,'#bf00ff'],[4,9,'#ff00aa'],[5,9,'#ff00aa']];
+const LEG_B = [[2,8,'#ff00aa'],[3,8,'#ff00aa'],[4,8,'#bf00ff'],[5,8,'#bf00ff'],
+               [3,8,'#ff00aa'],[4,9,'#bf00ff'],[5,9,'#bf00ff']];
+
+function drawDinoSprite(dx, dy, legFrame) {
+  const legs = legFrame % 2 === 0 ? LEG_A : LEG_B;
+  [...DINO_PIXELS, ...legs].forEach(([col, row, color]) => {
+    px(dx + col*2, dy + row*2, color);
+  });
+}
+
+// Cactus sprite — grid 10×16
+function drawCactus(cx, cy) {
+  const C = '#00ff88', D = '#00cc66', S = '#f5ff00';
+  // trunk
+  for (let r=2;r<=15;r++) { px(cx+8,cy+r*2,C); px(cx+10,cy+r*2,C); px(cx+12,cy+r*2,D); }
+  // left arm
+  for (let r=4;r<=7;r++) { px(cx+0,cy+r*2,C); px(cx+2,cy+r*2,C); px(cx+4,cy+r*2,D); }
+  for (let c=0;c<=6;c++) { px(cx+c*2,cy+8,C); }
+  // right arm
+  for (let r=5;r<=9;r++) { px(cx+14,cy+r*2,C); px(cx+16,cy+r*2,D); px(cx+18,cy+r*2,D); }
+  for (let c=6;c<=9;c++) { px(cx+c*2,cy+10,C); }
+  // spines
+  [[6,1],[6,9],[0,3],[16,4]].forEach(([c,r]) => px(cx+c*2,cy+r*2,S));
+}
+
+// ====== PTERODACTYL SPRITE ======
+function drawPtero(px3, py3, wingUp) {
+  const C = '#bf00ff', D = '#9900cc', E = '#f5ff00';
+  // body
+  [[3,2],[4,2],[5,2],[3,3],[4,3],[5,3],[6,3],[3,4],[4,4],[5,4]].forEach(([c,r]) => px(px3+c*2, py3+r*2, C));
+  // head/beak
+  [[6,1],[7,1],[8,1],[7,2],[8,2],[9,2],[8,3]].forEach(([c,r]) => px(px3+c*2, py3+r*2, D));
+  // eye
+  px(px3+7*2, py3+1*2, E);
+  // tail
+  [[1,3],[2,3],[1,4],[0,5]].forEach(([c,r]) => px(px3+c*2, py3+r*2, D));
+  // wings
+  if (wingUp) {
+    [[0,1],[1,1],[2,1],[3,1],[4,0],[5,0],[6,0],[7,0]].forEach(([c,r]) => px(px3+c*2, py3+r*2, C));
+    [[4,1],[5,1],[6,1]].forEach(([c,r]) => px(px3+c*2, py3+r*2, C));
+  } else {
+    [[0,3],[1,4],[2,4],[3,4],[4,4],[4,5],[5,5],[6,5],[7,4]].forEach(([c,r]) => px(px3+c*2, py3+r*2, C));
+  }
+}
+
+// ====== GAME STATE ======
+let dino, obstacles, pteros, score, speed, frame, gameOver, started, paused;
+let speedMultiplier = 1;
+let jumpForce = 11;   // positive value, applied as -jumpForce
+let gravityVal = 0.42;
+let showPauseMenu = false;
+let bgStars = [];
+let bgBuildings = [];
+let raindrops = [];
+
+for (let i=0;i<60;i++) bgStars.push({x:Math.random()*640,y:Math.random()*(GND-10),b:Math.random()});
+for (let i=0;i<8;i++) bgBuildings.push({
+  x: i*90 + Math.random()*40,
+  w: 40+Math.random()*30,
+  h: 40+Math.random()*70,
+  color: ['#0d0d2a','#10102e','#080818'][Math.floor(Math.random()*3)],
+  windows: Array.from({length:8},()=>Math.random()>.4)
+});
+for (let i=0;i<40;i++) raindrops.push({x:Math.random()*640,y:Math.random()*GND,speed:3+Math.random()*4});
+
+// ====== TRAP MUSIC ENGINE ======
+let audioCtx = null, masterGain = null, schedulerTimer = null;
+let musicPlaying = false, muted = false, beatCount = 0, nextNoteTime = 0;
+const BPM = 140, STEP = 60 / BPM / 4;
+// F# minor pentatonic 808 bass
+const BASS_SEQ = [92.5,0,0,0, 92.5,0,0,0, 82.41,0,0,0, 77.78,0,82.41,0];
+const KICK_SEQ = [1,0,0,0, 0,0,1,0, 0,0,0,0, 0,0,1,0];
+const SNARE_SEQ= [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0];
+const HAT_SEQ  = [1,0,1,1, 1,0,1,0, 1,0,1,1, 1,1,1,1];
+const MEL_SEQ  = [185,0,220,0, 185,0,0,0, 164.8,0,185,0, 164.8,0,0,247];
+
+function initAudio() {
+  if (audioCtx) return;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.28;
+    masterGain.connect(audioCtx.destination);
+  } catch(e) {}
+}
+function sched808(freq, t) {
+  if (!audioCtx || !freq) return;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.connect(g); g.connect(masterGain);
+  o.type = 'sine';
+  o.frequency.setValueAtTime(freq * 1.6, t);
+  o.frequency.exponentialRampToValueAtTime(freq, t + 0.1);
+  g.gain.setValueAtTime(0.85, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + STEP * 3.5);
+  o.start(t); o.stop(t + STEP * 4);
+}
+function schedKick(t) {
+  if (!audioCtx) return;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.connect(g); g.connect(masterGain);
+  o.frequency.setValueAtTime(200, t);
+  o.frequency.exponentialRampToValueAtTime(38, t + 0.07);
+  g.gain.setValueAtTime(1.0, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.13);
+  o.start(t); o.stop(t + 0.16);
+}
+function schedSnare(t) {
+  if (!audioCtx) return;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.connect(g); g.connect(masterGain);
+  o.type = 'triangle'; o.frequency.value = 180;
+  g.gain.setValueAtTime(0.35, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+  o.start(t); o.stop(t + 0.09);
+  const sz = Math.floor(audioCtx.sampleRate * 0.18);
+  const buf = audioCtx.createBuffer(1, sz, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i=0;i<sz;i++) d[i] = Math.random()*2-1;
+  const src = audioCtx.createBufferSource(), ng = audioCtx.createGain();
+  const nf = audioCtx.createBiquadFilter();
+  nf.type='bandpass'; nf.frequency.value=2200; nf.Q.value=0.6;
+  src.buffer=buf; src.connect(nf); nf.connect(ng); ng.connect(masterGain);
+  ng.gain.setValueAtTime(0.45, t);
+  ng.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+  src.start(t); src.stop(t + 0.2);
+}
+function schedHat(t, vol) {
+  if (!audioCtx) return;
+  const sz = Math.floor(audioCtx.sampleRate * 0.016);
+  const buf = audioCtx.createBuffer(1, sz, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i=0;i<sz;i++) d[i] = Math.random()*2-1;
+  const src = audioCtx.createBufferSource(), g = audioCtx.createGain();
+  const f = audioCtx.createBiquadFilter();
+  f.type='highpass'; f.frequency.value=10000;
+  src.buffer=buf; src.connect(f); f.connect(g); g.connect(masterGain);
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.016);
+  src.start(t); src.stop(t + 0.02);
+}
+function schedMel(freq, t) {
+  if (!audioCtx || !freq) return;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.connect(g); g.connect(masterGain);
+  o.type='sawtooth'; o.frequency.value=freq;
+  g.gain.setValueAtTime(0.06, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + STEP*1.6);
+  o.start(t); o.stop(t + STEP*2);
+}
+function musicScheduler() {
+  if (!musicPlaying || !audioCtx) return;
+  while (nextNoteTime < audioCtx.currentTime + 0.12) {
+    const s = beatCount % 16;
+    if (KICK_SEQ[s])  schedKick(nextNoteTime);
+    if (SNARE_SEQ[s]) schedSnare(nextNoteTime);
+    if (HAT_SEQ[s])   schedHat(nextNoteTime, s===15||s===14 ? 0.13 : 0.07);
+    if (BASS_SEQ[s])  sched808(BASS_SEQ[s], nextNoteTime);
+    if (MEL_SEQ[s])   schedMel(MEL_SEQ[s], nextNoteTime);
+    nextNoteTime += STEP;
+    beatCount++;
+  }
+}
+function startMusic() {
+  initAudio();
+  if (!audioCtx || musicPlaying) return;
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  masterGain.gain.value = muted ? 0 : 0.28;
+  musicPlaying = true;
+  nextNoteTime = audioCtx.currentTime + 0.05;
+  schedulerTimer = setInterval(musicScheduler, 50);
+}
+function stopMusic() {
+  musicPlaying = false;
+  if (schedulerTimer) { clearInterval(schedulerTimer); schedulerTimer = null; }
+}
+function toggleMute() {
+  muted = !muted;
+  if (masterGain) masterGain.gain.value = muted ? 0 : 0.28;
+}
+
+function init() {
+  dino = { x: 60, y: GND - DINO_H, vy: 0, onGround: true, ducking: false };
+  obstacles = [];
+  pteros = [];
+  score = 0;
+  speed = 3.5;
+  frame = 0;
+  gameOver = false;
+  started = false;
+  paused = false;
+  showPauseMenu = false;
+}
+init();
+
+// ====== INPUT ======
+function jump() {
+  if (showPauseMenu) return;
+  if (!started) { started = true; startMusic(); return; }
+  if (gameOver) { stopMusic(); init(); return; }
+  if (dino.onGround) { dino.vy = -jumpForce; dino.onGround = false; }
+}
+function togglePause() {
+  if (!started || gameOver) return;
+  paused = !paused;
+  showPauseMenu = paused;
+  if (paused) audioCtx && audioCtx.suspend(); else audioCtx && audioCtx.resume();
+  document.getElementById('pauseBtn').textContent = paused ? '▶ ПРОДОЛЖИТЬ [P]' : '⏸ ПАУЗА [P]';
+}
+
+let jumpHeld = false;
+function onKeyUp(e) {
+  if (e.code === 'Space' || e.code === 'ArrowUp') { jumpHeld = false; }
+  if (e.code === 'ArrowDown' || e.code === 'KeyS') { dino.ducking = false; }
+}
+function onKeyDown(e) {
+  if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jumpHeld = true; jump(); }
+  if (e.code === 'ArrowDown' || e.code === 'KeyS') { e.preventDefault(); if (!paused && started && !gameOver) dino.ducking = true; }
+  if (e.code === 'KeyR') { e.preventDefault(); stopMusic(); init(); }
+  if (e.code === 'KeyM') { e.preventDefault(); toggleMute(); }
+  if (e.code === 'KeyP') { e.preventDefault(); togglePause(); }
+}
+document.addEventListener('keyup', onKeyUp);
+document.addEventListener('keydown', onKeyDown);
+
+let touchStartY = 0;
+canvas.addEventListener('pointerdown', e => {
+  canvas.focus();
+  if (e.pointerType === 'touch') {
+    e.preventDefault(); // блокирует mouse-compat события после тача
+    touchStartY = e.clientY;
+    jump();
+  } else {
+    jumpHeld = true; // мышь: зажатие работает
+    jump();
+  }
+});
+canvas.addEventListener('pointermove', e => {
+  if (!e.buttons || e.pointerType !== 'touch') return;
+  const rect = canvas.getBoundingClientRect();
+  const dy = (e.clientY - touchStartY) * (200 / rect.height);
+  if (dy > 25 && !sliderDragging) {
+    if (!paused && started && !gameOver) dino.ducking = true;
+  }
+});
+document.addEventListener('pointerup', e => {
+  if (e.pointerType !== 'touch') jumpHeld = false;
+  dino.ducking = false;
+});
+document.addEventListener('pointercancel', e => {
+  if (e.pointerType !== 'touch') jumpHeld = false;
+  dino.ducking = false;
+});
+document.getElementById('pauseBtn').addEventListener('click', togglePause);
+document.getElementById('restartBtn').addEventListener('click', () => { stopMusic(); init(); });
+
+// ====== DRAW HELPERS ======
+function neonRect(x,y,w,h,color,glow=10) {
+  ctx.save();
+  ctx.shadowColor = color;
+  ctx.shadowBlur = glow;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x,y,w,h);
+  ctx.restore();
+}
+
+function neonText(text, x, y, color, size=14, align='left') {
+  ctx.save();
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = color;
+  ctx.font = `bold ${size}px "Courier New", monospace`;
+  ctx.textAlign = align;
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
+
+function pixelText(text, x, y, color, size=10) {
+  ctx.save();
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 8;
+  ctx.fillStyle = color;
+  ctx.font = `bold ${size}px "Courier New"`;
+  ctx.textAlign = 'left';
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
+
+// Scanlines effect
+function drawScanlines() {
+  ctx.save();
+  ctx.globalAlpha = 0.04;
+  ctx.fillStyle = '#000';
+  for (let y=0;y<200;y+=2) ctx.fillRect(0,y,640,1);
+  ctx.restore();
+}
+
+// ====== MAIN LOOP ======
+function loop() {
+  frame++;
+
+  // — Background —
+  ctx.fillStyle = '#05050f';
+  ctx.fillRect(0,0,640,200);
+
+  // Stars (twinkle)
+  bgStars.forEach(s => {
+    const alpha = 0.3 + Math.sin(frame*0.05 + s.b*10)*0.3;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(Math.floor(s.x), Math.floor(s.y), 1, 1);
+  });
+  ctx.globalAlpha = 1;
+
+  // Buildings silhouette
+  bgBuildings.forEach(b => {
+    ctx.fillStyle = b.color;
+    ctx.fillRect(b.x, GND - b.h, b.w, b.h);
+    // neon edge
+    ctx.fillStyle = '#00fff7';
+    ctx.fillRect(b.x, GND - b.h, b.w, 1);
+    ctx.fillRect(b.x, GND - b.h, 1, b.h);
+    // windows
+    let wi=0;
+    for(let wy=GND-b.h+4;wy<GND-8;wy+=10){
+      for(let wx=b.x+3;wx<b.x+b.w-6;wx+=8){
+        if(b.windows[wi%b.windows.length]) {
+          const flicker = Math.sin(frame*0.1+wi*2.3)>0.85;
+          ctx.fillStyle = flicker ? '#444' : ['#f5ff00','#ff00aa','#00fff7'][wi%3];
+          ctx.globalAlpha = flicker ? 0.1 : 0.7;
+          ctx.fillRect(wx,wy,4,5);
+          ctx.globalAlpha=1;
+        }
+        wi++;
+      }
+    }
+    // scroll buildings (parallax)
+    if (started && !gameOver && !paused) b.x -= 0.4 * speedMultiplier;
+    if (b.x < -b.w - 20) b.x = 660 + Math.random()*50;
+  });
+
+  // Rain
+  if (started && !paused) {
+    raindrops.forEach(r => {
+      ctx.strokeStyle = 'rgba(0,200,255,.18)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(r.x, r.y);
+      ctx.lineTo(r.x-1, r.y+6);
+      ctx.stroke();
+      r.x -= 0.5; r.y += r.speed * speedMultiplier;
+      if (r.y > GND) { r.y = -10; r.x = Math.random()*640; }
+    });
+  }
+
+  // Ground
+  ctx.fillStyle = '#0a0a18';
+  ctx.fillRect(0, GND, 640, 200-GND);
+  // neon ground line
+  ctx.save();
+  ctx.shadowColor = '#00fff7';
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = '#00fff7';
+  ctx.fillRect(0, GND, 640, 2);
+  ctx.restore();
+  // ground grid lines
+  ctx.strokeStyle = 'rgba(0,255,247,.08)';
+  ctx.lineWidth = 1;
+  const gOffset = (frame * speed * speedMultiplier * 0.5) % 40;
+  for (let gx = -gOffset; gx < 640; gx += 40) {
+    ctx.beginPath(); ctx.moveTo(gx, GND); ctx.lineTo(gx - 20, 200); ctx.stroke();
+  }
+  for (let i=0;i<4;i++) {
+    const gy = GND + i*15;
+    ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(640, gy); ctx.stroke();
+  }
+
+  if (!started) {
+    drawDinoSprite(dino.x, dino.y, 0);
+    neonText('// НАЖМИ ПРОБЕЛ ИЛИ ТАП //', 320, 90, '#00fff7', 13, 'center');
+    neonText('ПРЫГАЙ ЧЕРЕЗ ПРЕПЯТСТВИЯ', 320, 110, '#ff00aa', 11, 'center');
+    drawScanlines();
+    requestAnimationFrame(loop);
+    return;
+  }
+
+  if (!paused && !gameOver) {
+    // Physics
+    if (jumpHeld && dino.onGround) jump();
+    dino.vy += gravityVal;
+    dino.y += dino.vy * speedMultiplier;
+    if (dino.y >= GND - DINO_H) {
+      dino.y = GND - DINO_H;
+      dino.vy = 0;
+      dino.onGround = true;
+    }
+
+    // Spawn obstacles
+    const interval = Math.max(45, 100 - score * 0.05);
+    if (frame % Math.floor(interval) === 0 && obstacles.length < 4) {
+      obstacles.push({ x: 660, y: GND - 32, w: 20, h: 32 });
+    }
+    obstacles.forEach(o => o.x -= speed * speedMultiplier);
+    obstacles = obstacles.filter(o => o.x > -40);
+
+    // Spawn pterodactyls (after score 200)
+    if (score > 200 && frame % Math.floor(Math.max(80, 160 - score*0.03)) === 17 && pteros.length < 3) {
+      const heights = [GND - 25];
+      pteros.push({ x: 660, y: heights[Math.floor(Math.random()*heights.length)], w: 20, h: 12 });
+    }
+    pteros.forEach(p => p.x -= (speed + 0.8) * speedMultiplier);
+    pteros = pteros.filter(p => p.x > -40);
+
+    // Collision — cactus
+    const margin = 3;
+    for (const o of obstacles) {
+      if (dino.x + margin < o.x + o.w - margin &&
+          dino.x + DINO_W - margin > o.x + margin &&
+          dino.y + 4 < o.y + o.h &&
+          dino.y + DINO_H > o.y + margin) {
+        gameOver = true;
+      }
+    }
+    // Collision — ptero (ducking dino uses smaller hitbox: GND-10 to GND)
+    for (const p of pteros) {
+      const dinoTop = (dino.ducking && dino.onGround) ? GND - 10 : dino.y + 4;
+      const dinoBot = (dino.ducking && dino.onGround) ? GND      : dino.y + DINO_H;
+      if (dino.x + margin < p.x + p.w - margin &&
+          dino.x + DINO_W - margin > p.x + margin &&
+          dinoTop < p.y + p.h &&
+          dinoBot > p.y + margin) {
+        gameOver = true;
+      }
+    }
+
+    score++;
+    if (score % 400 === 0) speed = Math.min(speed + 0.4, 10);
+  }
+
+  // Draw obstacles
+  obstacles.forEach(o => drawCactus(o.x, o.y));
+
+  // Draw pterodactyls
+  pteros.forEach(p => {
+    drawPtero(p.x, p.y, Math.floor(frame / 10) % 2 === 0);
+    // neon glow trail
+    ctx.save();
+    ctx.shadowColor = '#bf00ff'; ctx.shadowBlur = 12;
+    ctx.strokeStyle = 'rgba(191,0,255,0)';
+    ctx.strokeRect(p.x, p.y, p.w, p.h);
+    ctx.restore();
+  });
+
+  // Draw dino
+  const legAnim = dino.onGround ? Math.floor(frame / 8) : 0;
+  if (dino.ducking && dino.onGround) {
+    ctx.save();
+    ctx.translate(dino.x, GND);
+    ctx.scale(1, 0.5);
+    ctx.translate(-dino.x, -GND);
+    drawDinoSprite(dino.x, dino.y, legAnim);
+    ctx.restore();
+  } else {
+    drawDinoSprite(dino.x, dino.y, legAnim);
+  }
+
+  // Dino glow
+  ctx.save();
+  ctx.shadowColor = '#00fff7';
+  ctx.shadowBlur = 18;
+  ctx.strokeStyle = 'rgba(0,255,247,0)';
+  ctx.strokeRect(dino.x, dino.y, DINO_W, DINO_H);
+  ctx.restore();
+
+  // HUD
+  ctx.save();
+  ctx.shadowColor = '#f5ff00';
+  ctx.shadowBlur = 10;
+  ctx.fillStyle = '#f5ff00';
+  ctx.font = 'bold 13px "Courier New"';
+  ctx.textAlign = 'left';
+  ctx.fillText('SCR:' + Math.floor(score/5).toString().padStart(5,'0'), 8, 18);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#ff00aa';
+  ctx.shadowColor = '#ff00aa';
+  ctx.fillText('SPD:' + (speedMultiplier).toFixed(1) + 'x', 632, 18);
+  ctx.restore();
+
+  // Scanlines
+  drawScanlines();
+
+  // ====== PAUSE MENU ======
+  if (showPauseMenu) {
+    // overlay
+    ctx.fillStyle = 'rgba(0,0,0,.75)';
+    ctx.fillRect(0,0,640,200);
+
+    // panel — taller for 3 sliders
+    const px2=120, py2=12, pw=400, ph=176;
+    ctx.fillStyle = '#0a0a1e';
+    ctx.fillRect(px2,py2,pw,ph);
+    neonRect(px2,py2,pw,ph,'#00fff7',14);
+
+    neonText('// ПАУЗА //', 320, 34, '#00fff7', 14, 'center');
+
+    // Helper: draw one neon slider
+    function drawSlider(label, value, minV, maxV, ticks, color, labelY, trackY) {
+      const SLX=148, SLW=344, SLH=6;
+      const kx = SLX + ((value - minV) / (maxV - minV)) * SLW;
+      neonText(label + '  ' + value.toFixed(2), SLX, labelY, color, 10);
+      ctx.fillStyle = '#0d0020'; ctx.fillRect(SLX, trackY, SLW, SLH);
+      ctx.save(); ctx.shadowColor=color; ctx.shadowBlur=8;
+      ctx.fillStyle=color; ctx.fillRect(SLX, trackY, kx-SLX, SLH);
+      ctx.restore();
+      ctx.strokeStyle=color; ctx.lineWidth=1; ctx.strokeRect(SLX,trackY,SLW,SLH);
+      ticks.forEach(t => {
+        const tx = SLX + ((t - minV)/(maxV - minV))*SLW;
+        ctx.save(); ctx.strokeStyle='rgba(200,200,200,.3)'; ctx.lineWidth=1;
+        ctx.beginPath(); ctx.moveTo(tx,trackY+SLH); ctx.lineTo(tx,trackY+SLH+3); ctx.stroke();
+        ctx.fillStyle='rgba(200,200,200,.5)'; ctx.font='6px "Courier New"'; ctx.textAlign='center';
+        ctx.fillText(t, tx, trackY+SLH+10); ctx.restore();
+      });
+      ctx.save(); ctx.shadowColor=color; ctx.shadowBlur=14;
+      ctx.fillStyle=color; ctx.fillRect(kx-5,trackY-5,10,SLH+10);
+      ctx.fillStyle='#fff'; ctx.fillRect(kx-2,trackY-2,4,SLH+4);
+      ctx.restore();
+      return {SLX, SLW, SLH, trackY};
+    }
+
+    const s1 = drawSlider('СКОРОСТЬ:', speedMultiplier, 0.5, 3.0,
+      [0.5,1,1.5,2,2.5,3], '#ff00aa', 58, 66);
+    const s2 = drawSlider('ПРЫЖОК:', jumpForce, 6, 16,
+      [6,8,10,12,14,16], '#00fff7', 96, 104);
+    const s3 = drawSlider('ГРАВИТАЦИЯ:', gravityVal, 0.1, 0.9,
+      [0.1,0.3,0.5,0.7,0.9], '#f5ff00', 134, 142);
+
+    neonText('▶  ПРОДОЛЖИТЬ — P', 320, 162, '#00fff7', 9, 'center');
+    neonText('↺  РЕСТАРТ — кнопка внизу', 320, 174, '#bf00ff', 9, 'center');
+
+    // Handle slider drag — all 3 sliders
+    canvas._pauseHandler = function(e) {
+      if (!showPauseMenu) return;
+      const rect = canvas.getBoundingClientRect();
+      const cx2 = (e.clientX - rect.left) * (640 / rect.width);
+      const cy2 = (e.clientY - rect.top) * (200 / rect.height);
+      function trySlider(SLX, SLW, SLH, trackY, minV, maxV, step, setter) {
+        if (cx2 >= SLX-8 && cx2 <= SLX+SLW+8 && cy2 >= trackY-10 && cy2 <= trackY+SLH+16) {
+          const t = Math.max(0, Math.min(1, (cx2-SLX)/SLW));
+          setter(Math.round((minV + t*(maxV-minV)) / step) * step);
+        }
+      }
+      trySlider(148,344,6,66,  0.5, 3.0, 0.1, v => speedMultiplier = v);
+      trySlider(148,344,6,104, 6,   16,  0.5, v => jumpForce = v);
+      trySlider(148,344,6,142, 0.1, 0.9, 0.05, v => gravityVal = v);
+    };
+    canvas._sliderDrag = true;
+  }
+
+  // ====== GAME OVER ======
+  if (gameOver) {
+    ctx.fillStyle = 'rgba(0,0,0,.6)';
+    ctx.fillRect(0,0,640,200);
+    neonRect(160,50,320,100,'#ff00aa',20);
+    ctx.fillStyle = '#0a0a1e';
+    ctx.fillRect(162,52,316,96);
+    neonText('// GAME OVER //', 320, 85, '#ff00aa', 18, 'center');
+    neonText('SCORE: ' + Math.floor(score/5).toString().padStart(5,'0'), 320, 110, '#f5ff00', 13, 'center');
+    neonText('НАЖМИ ПРОБЕЛ / ТАП → RESTART', 320, 135, '#00fff7', 9, 'center');
+  }
+
+  requestAnimationFrame(loop);
+}
+
+// Slider drag support
+let sliderDragging = false;
+canvas.addEventListener('pointerdown', e => {
+  if (canvas._pauseHandler) { canvas._pauseHandler(e); sliderDragging = true; }
+});
+canvas.addEventListener('pointermove', e => {
+  if (sliderDragging && canvas._pauseHandler) canvas._pauseHandler(e);
+});
+canvas.addEventListener('pointerup', () => { sliderDragging = false; });
+canvas.addEventListener('pointercancel', () => { sliderDragging = false; });
+
+loop();
+</script>
